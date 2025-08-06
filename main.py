@@ -16,7 +16,11 @@ from typing import Any, Dict, Optional
 
 from dexscreener import DexscreenerClient
 from solders.pubkey import Pubkey as PublicKey
-from solders import SerdeJSONError
+try:
+    # SerdeJSONError moved under solders.errors in newer versions
+    from solders.errors import SerdeJSONError
+except ImportError:  # pragma: no cover - fallback for older versions
+    from solders import SerdeJSONError  # type: ignore[attr-defined]
 from solana.rpc.async_api import AsyncClient
 from openai import AsyncOpenAI
 
