@@ -5,6 +5,7 @@ information to build a structured JSON payload. The payload is periodically
 sent to an LLM (OpenAI GPT-4) which returns trade recommendations.
 """
 
+import argparse
 import asyncio
 import json
 import logging
@@ -286,17 +287,33 @@ def build_amm_program() -> str:
     return f"{name} (Program ID: {program_id})"
 
 
-async def main() -> None:
-    token_address = os.getenv("TOKEN_ADDRESS", "TokenMintAddress")
-    pair_address = os.getenv("PAIR_ADDRESS", "PairAddress")
+async def main(token_address: str) -> None:
+    client = DexscreenerClient()
+    pairs = await client.get_token_pairs_async(token_address)
+    if not pairs:
+        logging.error("No pairs found for token %s", token_address)
+        return
+
+    # Select the pair with the highest USD liquidity
+    pair = max(
+        pairs,
+        key=lambda p: (p.liquidity.usd if p.liquidity and p.liquidity.usd else 0),
+    )
+
     amm_program = build_amm_program()
 
-    monitor = RugRiskMonitor("solana", pair_address, token_address, amm_program)
+    monitor = RugRiskMonitor(
+        pair.chain_id, pair.pair_address, token_address, amm_program
+    )
     await monitor.run()
 
 
 if __name__ == "__main__":  # pragma: no cover - script entry point
+    parser = argparse.ArgumentParser(description="Solana rug risk monitor")
+    parser.add_argument("mint_address", help="SPL token mint address to monitor")
+    args = parser.parse_args()
+
     try:
-        asyncio.run(main())
+        asyncio.run(main(args.mint_address))
     except KeyboardInterrupt:
         logging.info("Shutting down...")
