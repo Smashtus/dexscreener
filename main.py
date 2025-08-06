@@ -15,7 +15,7 @@ import time
 from typing import Any, Dict, Optional
 
 from dexscreener import DexscreenerClient
-from solana.publickey import PublicKey
+from solders.pubkey import Pubkey as PublicKey
 from solana.rpc.async_api import AsyncClient
 from openai import AsyncOpenAI
 
@@ -100,7 +100,7 @@ class RugRiskMonitor:
         """Fetch freeze/mint authorities from Solana RPC."""
         try:
             resp = await self.rpc_client.get_account_info(
-                PublicKey(self.token_address), encoding="jsonParsed"
+                PublicKey.from_string(self.token_address), encoding="jsonParsed"
             )
             info = resp.get("result", {}).get("value")
             if info and info.get("data"):
