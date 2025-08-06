@@ -16,6 +16,7 @@ from typing import Any, Dict, Optional
 
 from dexscreener import DexscreenerClient
 from solders.pubkey import Pubkey as PublicKey
+from solders import SerdeJSONError
 from solana.rpc.async_api import AsyncClient
 from openai import AsyncOpenAI
 
@@ -99,8 +100,14 @@ class RugRiskMonitor:
     async def fetch_onchain_data(self) -> None:
         """Fetch freeze/mint authorities from Solana RPC."""
         try:
+            try:
+                pubkey = PublicKey.from_string(self.token_address)
+            except ValueError:
+                logging.error("Invalid token address: %s", self.token_address)
+                return
+
             resp = await self.rpc_client.get_account_info(
-                PublicKey.from_string(self.token_address), encoding="jsonParsed"
+                pubkey, encoding="jsonParsed"
             )
             info = resp.get("result", {}).get("value")
             if info and info.get("data"):
@@ -111,6 +118,12 @@ class RugRiskMonitor:
                     "freeze_authority": freeze,
                     "mint_authority": mint,
                 }
+        except SerdeJSONError as exc:  # pragma: no cover - malformed response
+            logging.error(
+                "Solana RPC returned malformed JSON for token %s: %s",
+                self.token_address,
+                exc,
+            )
         except Exception as exc:  # pragma: no cover - network failure
             logging.exception("Solana RPC error: %s", exc)
 
@@ -288,6 +301,12 @@ def build_amm_program() -> str:
 
 
 async def main(token_address: str) -> None:
+    try:
+        PublicKey.from_string(token_address)
+    except ValueError:
+        logging.error("Invalid token address: %s", token_address)
+        return
+
     client = DexscreenerClient()
     pairs = await client.get_token_pairs_async(token_address)
     if not pairs:
