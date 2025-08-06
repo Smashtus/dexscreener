@@ -121,7 +121,8 @@ class DexscreenerClient:
         if len(addresses_list) > 30:
             raise ValueError("The maximum number of addresses allowed is 30.")
         resp = self._client_300rpm.request("GET", f"dex/pairs/{chain}/{','.join(addresses_list)}")
-        return [TokenPair(**pair) for pair in resp.get("pairs", [])]
+        pairs = (resp or {}).get("pairs") or []
+        return [TokenPair(**pair) for pair in pairs]
 
     async def get_token_pair_list_async(self, chain: str, addresses: Iterable[str]) -> List[TokenPair]:
         """
@@ -131,7 +132,8 @@ class DexscreenerClient:
         if len(addresses_list) > 30:
             raise ValueError("The maximum number of addresses allowed is 30.")
         resp = await self._client_300rpm.request_async("GET", f"dex/pairs/{chain}/{','.join(addresses_list)}")
-        return [TokenPair(**pair) for pair in resp.get("pairs", [])]    
+        pairs = (resp or {}).get("pairs") or []
+        return [TokenPair(**pair) for pair in pairs]
     
     def get_token_pairs(self, address: str) -> list[TokenPair]:
         """
@@ -143,15 +145,17 @@ class DexscreenerClient:
         :return:
             Response as list of TokenPair model
         """
-        resp = self._client_300rpm.request("GET",  f"dex/tokens/{address}")        
-        return [TokenPair(**pair) for pair in resp.get("pairs", [])]
+        resp = self._client_300rpm.request("GET",  f"dex/tokens/{address}")
+        pairs = (resp or {}).get("pairs") or []
+        return [TokenPair(**pair) for pair in pairs]
 
     async def get_token_pairs_async(self, address: str) -> list[TokenPair]:
         """
         Async version of `get_token_pairs`
         """
-        resp = await self._client_300rpm.request_async("GET", f"dex/tokens/{address}")        
-        return [TokenPair(**pair) for pair in resp.get("pairs", [])]
+        resp = await self._client_300rpm.request_async("GET", f"dex/tokens/{address}")
+        pairs = (resp or {}).get("pairs") or []
+        return [TokenPair(**pair) for pair in pairs]
 
     def search_pairs(self, search_query: str) -> list[TokenPair]:
         """
@@ -163,12 +167,14 @@ class DexscreenerClient:
         :return:
             Response as list of TokenPair model
         """
-        resp = self._client_300rpm.request("GET", f"dex/search/?q={search_query}")        
-        return [TokenPair(**pair) for pair in resp.get("pairs", [])]
+        resp = self._client_300rpm.request("GET", f"dex/search/?q={search_query}")
+        pairs = (resp or {}).get("pairs") or []
+        return [TokenPair(**pair) for pair in pairs]
 
     async def search_pairs_async(self, search_query: str) -> list[TokenPair]:
         """
         Async version of `search_pairs`
         """
-        resp = await self._client_300rpm.request_async("GET", f"dex/search/?q={search_query}")        
-        return [TokenPair(**pair) for pair in resp.get("pairs", [])]
+        resp = await self._client_300rpm.request_async("GET", f"dex/search/?q={search_query}")
+        pairs = (resp or {}).get("pairs") or []
+        return [TokenPair(**pair) for pair in pairs]
