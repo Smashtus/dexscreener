@@ -19,3 +19,11 @@ pairs = client.get_token_pairs("0x2170Ed0880ac9A755fd29B2688956BD959F933F8")
 
 search = client.search_pairs("WBTC")
 ```
+
+# Rug Risk Monitor
+
+Use the provided `main.py` script to monitor a Solana token by mint address:
+
+```
+python main.py <mint_address>
+```
