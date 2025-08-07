@@ -269,11 +269,15 @@ class RugRiskMonitor:
 
     async def send_to_llm(self) -> None:
         """Send metrics to GPT-4 and log the recommendation."""
+        payload = self.build_payload()
+
         if not self.openai:
             logging.warning("OpenAI API key not set; skipping LLM call")
+            # Output the payload to stdout for debugging/visibility when the
+            # LLM is not invoked so users can still consume the analysis.
+            print(json.dumps(payload, indent=2))
             return
 
-        payload = self.build_payload()
         logging.debug("Payload built for LLM: %s", json.dumps(payload))
         try:
             response = await self.openai.chat.completions.create(
