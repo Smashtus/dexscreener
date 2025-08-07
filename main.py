@@ -12,7 +12,8 @@ import logging
 import os
 import statistics
 import time
-from typing import Any, Dict, Optional
+from collections import deque
+from typing import Any, Deque, Dict, Optional
 
 from dexscreener import DexscreenerClient
 from solders.pubkey import Pubkey as PublicKey
@@ -54,14 +55,12 @@ class RugRiskMonitor:
             AsyncOpenAI(api_key=api_key) if api_key else None
         )
 
-        self.start_time = time.time()
-        self.entry_price: Optional[float] = None
-        self.price_history: list[tuple[float, float]] = []
-        self.liquidity_history: list[tuple[float, float]] = []
-
-        self.dex_state: Dict[str, Any] = {}
+        self.snapshots: Deque[Dict[str, Any]] = deque(maxlen=60)
         self.onchain_state: Dict[str, Any] = {}
-        self.metrics: Dict[str, Any] = {}
+
+        # Aggregation control
+        self._last_aggregate = time.time()
+
         # Stop flag used when on-chain data cannot be fetched
         self._onchain_error: bool = False
         # Track consecutive on-chain fetch failures
@@ -78,34 +77,22 @@ class RugRiskMonitor:
                 logging.warning("Pair %s not found on chain %s", self.pair_address, self.chain)
                 return
 
-            now = time.time()
-            price = pair.price_usd or 0.0
-            if self.entry_price is None:
-                self.entry_price = price
-            self.price_history.append((now, price))
-
-            if pair.liquidity and pair.liquidity.usd is not None:
-                self.liquidity_history.append((now, pair.liquidity.usd))
-
-            tx = pair.transactions.m5
-            total_tx = tx.buys + tx.sells
-            buy_pct = tx.buys / total_tx * 100 if total_tx else 0.0
-            sell_pct = tx.sells / total_tx * 100 if total_tx else 0.0
-
-            self.dex_state = {
-                "price_usd": price,
-                "buy_volume_pct": buy_pct,
-                "sell_volume_pct": sell_pct,
-                "whale_sell_pct": 0.0,
-                "liquidity_usd": pair.liquidity.usd if pair.liquidity else 0.0,
-                "sol_reserve": pair.liquidity.base if pair.liquidity else 0.0,
-                "token_reserve": pair.liquidity.quote if pair.liquidity else 0.0,
-                "fdv": pair.fdv,
-                "market_cap": pair.fdv,
+            now = int(time.time())
+            snapshot = {
+                "timestamp": now,
+                "current_price_usd": pair.price_usd or 0.0,
+                "liquidity_usd": pair.liquidity.usd if pair.liquidity and pair.liquidity.usd else 0.0,
+                "buy_tx_count_5m": pair.transactions.m5.buys,
+                "sell_tx_count_5m": pair.transactions.m5.sells,
+                "volume_usd_5m": pair.volume.m5 or 0.0,
+                "base_reserve": pair.liquidity.base if pair.liquidity else 0.0,
+                "quote_reserve": pair.liquidity.quote if pair.liquidity else 0.0,
+                "fdv_usd": pair.fdv or 0.0,
             }
+            self.snapshots.append(snapshot)
+            logging.debug("Snapshot stored: %s", snapshot)
         except Exception as exc:  # pragma: no cover - network failure
             logging.exception("Dexscreener API error: %s", exc)
-
     async def fetch_onchain_data(self) -> None:
         """Fetch freeze/mint authorities from Solana RPC."""
         try:
@@ -145,140 +132,127 @@ class RugRiskMonitor:
             if self._onchain_error_count >= 3:
                 self._onchain_error = True
 
-    def compute_metrics(self) -> None:
-        """Compute derived metrics from historical data."""
-        if len(self.price_history) >= 2:
-            current_price = self.price_history[-1][1]
-            price_change = (
-                (current_price - self.entry_price) / self.entry_price * 100
-                if self.entry_price
-                else 0.0
-            )
-            prices = [p for _, p in self.price_history[-30:]]
-            mean_price = statistics.fmean(prices) if prices else 0.0
-            volatility = (
-                (max(prices) - min(prices)) / mean_price * 100 if mean_price else 0.0
-            )
-            if len(self.price_history) >= 3:
-                t0, p0 = self.price_history[-3]
-                t1, p1 = self.price_history[-2]
-                t2, p2 = self.price_history[-1]
-                slope1 = (p1 - p0) / (t1 - t0) if t1 != t0 else 0.0
-                slope2 = (p2 - p1) / (t2 - t1) if t2 != t1 else 0.0
-                acceleration = (
-                    (slope2 - slope1) / (t2 - t1) if t2 != t1 else 0.0
-                )
-            else:
-                acceleration = 0.0
+    def _snapshot_n_seconds_ago(self, seconds: int) -> Optional[Dict[str, Any]]:
+        """Return snapshot from `seconds` ago if available."""
+        if not self.snapshots:
+            return None
+        target = self.snapshots[-1]["timestamp"] - seconds
+        for snap in reversed(self.snapshots):
+            if snap["timestamp"] <= target:
+                return snap
+        return None
 
-            self.metrics.update(
-                {
-                    "price_change_pct": price_change,
-                    "price_acceleration": acceleration,
-                    "price_volatility": volatility,
-                }
-            )
+    def _pct_change(self, field: str, seconds: int) -> float:
+        past = self._snapshot_n_seconds_ago(seconds)
+        if not past:
+            return 0.0
+        current = self.snapshots[-1][field]
+        previous = past[field]
+        return ((current - previous) / previous * 100) if previous else 0.0
 
-        if len(self.liquidity_history) >= 2:
-            t0, l0 = self.liquidity_history[-2]
-            t1, l1 = self.liquidity_history[-1]
+    def aggregate_snapshots(self) -> Dict[str, Any]:
+        """Aggregate metrics over stored snapshots."""
+        current = self.snapshots[-1]
+
+        # Price metrics
+        price_change = {
+            "5s": self._pct_change("current_price_usd", 5),
+            "10s": self._pct_change("current_price_usd", 10),
+            "30s": self._pct_change("current_price_usd", 30),
+        }
+        price_accel = {
+            "5s": price_change["5s"] / 5,
+            "10s": price_change["10s"] / 10,
+        }
+        prices_30 = [s["current_price_usd"] for s in self.snapshots if s["timestamp"] >= current["timestamp"] - 30]
+        price_vol = (
+            statistics.pstdev(prices_30) / statistics.fmean(prices_30) * 100
+            if len(prices_30) > 1 and statistics.fmean(prices_30)
+            else 0.0
+        )
+
+        # Liquidity metrics
+        liquidity_change = {
+            "5s": self._pct_change("liquidity_usd", 5),
+            "10s": self._pct_change("liquidity_usd", 10),
+            "30s": self._pct_change("liquidity_usd", 30),
+        }
+        liq10 = self._snapshot_n_seconds_ago(10)
+        if liq10 and liq10["liquidity_usd"]:
             drain_rate = (
-                ((l1 - l0) / l0) / (t1 - t0) * 100 if l0 and t1 != t0 else 0.0
+                (liq10["liquidity_usd"] - current["liquidity_usd"]) / liq10["liquidity_usd"] / 10 * 100
             )
-            redeemed_pct = max(0.0, (l0 - l1) / l0 * 100) if l0 else 0.0
-            flash_crash = redeemed_pct > 50
-            self.metrics.update(
-                {
-                    "liquidity_drain_rate": drain_rate,
-                    "lp_tokens_redeemed_pct": redeemed_pct,
-                    "flash_crash_detected": flash_crash,
-                    "flash_crash_magnitude_pct": redeemed_pct if flash_crash else 0.0,
-                }
-            )
+        else:
+            drain_rate = 0.0
+        liqs_30 = [s["liquidity_usd"] for s in self.snapshots if s["timestamp"] >= current["timestamp"] - 30]
+        liq_vol = (
+            statistics.pstdev(liqs_30) / statistics.fmean(liqs_30) * 100
+            if len(liqs_30) > 1 and statistics.fmean(liqs_30)
+            else 0.0
+        )
+
+        # Transaction metrics
+        def tx_ratio(seconds: int) -> float:
+            past = self._snapshot_n_seconds_ago(seconds)
+            if not past:
+                return 0.0
+            buy_delta = max(0, current["buy_tx_count_5m"] - past["buy_tx_count_5m"])
+            sell_delta = max(0, current["sell_tx_count_5m"] - past["sell_tx_count_5m"])
+            total = buy_delta + sell_delta
+            return (buy_delta / total * 100) if total else 0.0
+
+        buy_sell_ratio = {
+            "5s": tx_ratio(5),
+            "10s": tx_ratio(10),
+            "30s": tx_ratio(30),
+        }
+        volume_change = {
+            "5s": self._pct_change("volume_usd_5m", 5),
+            "10s": self._pct_change("volume_usd_5m", 10),
+            "30s": self._pct_change("volume_usd_5m", 30),
+        }
+
+        return {
+            "price_analysis": {
+                "current_price_usd": current["current_price_usd"],
+                "price_change_pct": price_change,
+                "price_acceleration_pct_per_sec": price_accel,
+                "price_volatility_pct_30s": price_vol,
+            },
+            "liquidity_analysis": {
+                "current_liquidity_usd": current["liquidity_usd"],
+                "liquidity_change_pct": liquidity_change,
+                "liquidity_drain_rate_pct_per_sec_10s": drain_rate,
+                "liquidity_volatility_pct_30s": liq_vol,
+            },
+            "transaction_analysis": {
+                "buy_sell_tx_ratio_pct": buy_sell_ratio,
+                "buy_sell_volume_change_pct": volume_change,
+            },
+            "market_evaluation": {
+                "fully_diluted_valuation_usd": current["fdv_usd"],
+            },
+        }
 
     def build_payload(self) -> Dict[str, Any]:
-        """Construct JSON payload sent to the LLM."""
-        now = time.time()
-        current_price = self.price_history[-1][1] if self.price_history else 0.0
+        aggregates = self.aggregate_snapshots()
         payload = {
             "token_metadata": {
                 "token_address": self.token_address,
                 "pair_address": self.pair_address,
                 "amm_program": self.amm_program,
-                "freeze_authority": self.onchain_state.get("freeze_authority"),
-                "mint_authority": self.onchain_state.get("mint_authority"),
             },
-            "price_analysis": {
-                "time_since_entry_sec": int(now - self.start_time),
-                "entry_price_usd": self.entry_price or 0.0,
-                "current_price_usd": current_price,
-                "price_change_pct_since_entry": self.metrics.get(
-                    "price_change_pct", 0.0
-                ),
-                "price_acceleration_pct_per_sec": self.metrics.get(
-                    "price_acceleration", 0.0
-                ),
-                "price_volatility_pct": self.metrics.get("price_volatility", 0.0),
-            },
-            "volume_analysis": {
-                "instant_volume_window_sec": 60,
-                "buy_volume_pct": self.dex_state.get("buy_volume_pct", 0.0),
-                "sell_volume_pct": self.dex_state.get("sell_volume_pct", 0.0),
-                "recent_whale_sell_pct": self.dex_state.get("whale_sell_pct", 0.0),
-            },
-            "liquidity_pool_analysis": {
-                "liquidity_formula": "CPMM: x * y = k",
-                "sol_reserve": self.dex_state.get("sol_reserve", 0.0),
-                "token_reserve": self.dex_state.get("token_reserve", 0.0),
-                "current_liquidity_usd": self.dex_state.get("liquidity_usd", 0.0),
-                "lp_tokens_redeemed_pct": self.metrics.get(
-                    "lp_tokens_redeemed_pct", 0.0
-                ),
-                "liquidity_drain_rate_pct_per_sec": self.metrics.get(
-                    "liquidity_drain_rate", 0.0
-                ),
-            },
-            "market_evaluation": {
-                "market_cap_usd": self.dex_state.get("market_cap"),
-                "fully_diluted_valuation_usd": self.dex_state.get("fdv"),
-                "holders_count": 0,
-                "top_holder_pct": 0.0,
-            },
-            "rug_risk_indicators": {
-                "freeze_authority_status": "None (Safe)"
-                if not self.onchain_state.get("freeze_authority")
-                else "Set (Risk)",
-                "mint_authority_status": "None (Safe)"
-                if not self.onchain_state.get("mint_authority")
-                else "Set (Risk)",
-                "deployer_wallet_lp_redemption": {
-                    "recent_lp_redemptions_pct": self.metrics.get(
-                        "lp_tokens_redeemed_pct", 0.0
-                    ),
-                    "status": "HIGH Risk"
-                    if self.metrics.get("lp_tokens_redeemed_pct", 0.0) > 50
-                    else "LOW Risk",
-                },
-                "flash_crash_detected": self.metrics.get("flash_crash_detected", False),
-                "flash_crash_magnitude_pct": self.metrics.get(
-                    "flash_crash_magnitude_pct", 0.0
-                ),
-            },
+            **aggregates,
         }
         return payload
 
-    async def send_to_llm(self) -> None:
+    async def send_to_llm(self, payload: Dict[str, Any]) -> None:
         """Send metrics to GPT-4 and log the recommendation."""
-        payload = self.build_payload()
-
         if not self.openai:
-            logging.warning("OpenAI API key not set; skipping LLM call")
-            # Output the payload to stdout for debugging/visibility when the
-            # LLM is not invoked so users can still consume the analysis.
+            logging.info("Aggregated payload: %s", json.dumps(payload))
             print(json.dumps(payload, indent=2))
             return
 
-        logging.debug("Payload built for LLM: %s", json.dumps(payload))
         try:
             response = await self.openai.chat.completions.create(
                 model="gpt-4o-mini",
@@ -303,21 +277,20 @@ class RugRiskMonitor:
             await self.fetch_onchain_data()
             await asyncio.sleep(5)
 
-    async def _llm_loop(self) -> None:
-        """Periodically compute metrics and output analysis."""
+    async def _aggregate_loop(self) -> None:
+        """Aggregate snapshots every 30 seconds and output analysis."""
         while True:
-            if not self.price_history:
-                await asyncio.sleep(1)
-                continue
-            self.compute_metrics()
-            await self.send_to_llm()
+            if self.snapshots and time.time() - self._last_aggregate >= 30:
+                payload = self.build_payload()
+                await self.send_to_llm(payload)
+                self._last_aggregate = time.time()
             await asyncio.sleep(1)
 
     async def run(self) -> None:
         await asyncio.gather(
             self._dex_loop(),
             self._onchain_loop(),
-            self._llm_loop(),
+            self._aggregate_loop(),
         )
 
 
