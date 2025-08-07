@@ -64,6 +64,8 @@ class RugRiskMonitor:
         self.dex_state: Dict[str, Any] = {}
         self.onchain_state: Dict[str, Any] = {}
         self.metrics: Dict[str, Any] = {}
+        # Stop flag used when on-chain data cannot be fetched
+        self._onchain_error: bool = False
 
     async def fetch_dex_data(self) -> None:
         """Pull latest market data from Dexscreener."""
@@ -128,8 +130,10 @@ class RugRiskMonitor:
                 self.token_address,
                 exc,
             )
+            self._onchain_error = True
         except Exception as exc:  # pragma: no cover - network failure
             logging.exception("Solana RPC error: %s", exc)
+            self._onchain_error = True
 
     def compute_metrics(self) -> None:
         """Compute derived metrics from historical data."""
@@ -280,7 +284,7 @@ class RugRiskMonitor:
             await asyncio.sleep(1)
 
     async def _onchain_loop(self) -> None:
-        while True:
+        while not self._onchain_error:
             await self.fetch_onchain_data()
             await asyncio.sleep(5)
 
