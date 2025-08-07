@@ -115,15 +115,15 @@ class RugRiskMonitor:
                 logging.error("Invalid token address: %s", self.token_address)
                 return
 
-            resp = await self.rpc_client.get_account_info(
-                pubkey, encoding="jsonParsed"
+            resp = await self.rpc_client.get_account_info_json_parsed(pubkey)
+            logging.debug(
+                "RPC account info for %s: %s", self.token_address, resp
             )
-            logging.debug("RPC account info for %s: %s", self.token_address, resp)
-            info = resp.get("result", {}).get("value")
-            if info and info.get("data"):
-                parsed = info["data"]["parsed"]["info"]
-                freeze = parsed.get("freezeAuthority")
-                mint = parsed.get("mintAuthority")
+            info = resp.value
+            if info and getattr(info, "data", None) and hasattr(info.data, "parsed"):
+                token_info = info.data.parsed.get("info", {})
+                freeze = token_info.get("freezeAuthority")
+                mint = token_info.get("mintAuthority")
                 self.onchain_state = {
                     "freeze_authority": freeze,
                     "mint_authority": mint,

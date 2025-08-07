@@ -9,7 +9,7 @@ from main import RugRiskMonitor
 
 
 class FailingClient:
-    async def get_account_info(self, *args, **kwargs):
+    async def get_account_info_json_parsed(self, *args, **kwargs):
         raise SerdeJSONError("bad json")
 
 
