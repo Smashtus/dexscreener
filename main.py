@@ -304,10 +304,14 @@ class RugRiskMonitor:
             await asyncio.sleep(5)
 
     async def _llm_loop(self) -> None:
+        """Periodically compute metrics and output analysis."""
         while True:
+            if not self.price_history:
+                await asyncio.sleep(1)
+                continue
             self.compute_metrics()
             await self.send_to_llm()
-            await asyncio.sleep(30)
+            await asyncio.sleep(1)
 
     async def run(self) -> None:
         await asyncio.gather(
