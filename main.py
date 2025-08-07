@@ -64,6 +64,8 @@ class RugRiskMonitor:
         self.metrics: Dict[str, Any] = {}
         # Stop flag used when on-chain data cannot be fetched
         self._onchain_error: bool = False
+        # Track consecutive on-chain fetch failures
+        self._onchain_error_count: int = 0
 
     async def fetch_dex_data(self) -> None:
         """Pull latest market data from Dexscreener."""
@@ -126,16 +128,22 @@ class RugRiskMonitor:
                     "freeze_authority": freeze,
                     "mint_authority": mint,
                 }
+                # Reset error counter on success
+                self._onchain_error_count = 0
         except SerdeJSONError as exc:  # pragma: no cover - malformed response
             logging.error(
                 "Solana RPC returned malformed JSON for token %s: %s",
                 self.token_address,
                 exc,
             )
-            self._onchain_error = True
+            self._onchain_error_count += 1
+            if self._onchain_error_count >= 3:
+                self._onchain_error = True
         except Exception as exc:  # pragma: no cover - network failure
             logging.exception("Solana RPC error: %s", exc)
-            self._onchain_error = True
+            self._onchain_error_count += 1
+            if self._onchain_error_count >= 3:
+                self._onchain_error = True
 
     def compute_metrics(self) -> None:
         """Compute derived metrics from historical data."""
