@@ -90,7 +90,7 @@ class RugRiskMonitor:
                 "fdv_usd": pair.fdv or 0.0,
             }
             self.snapshots.append(snapshot)
-            logging.debug("Snapshot stored: %s", snapshot)
+            logging.info("Snapshot stored: %s", snapshot)
         except Exception as exc:  # pragma: no cover - network failure
             logging.exception("Dexscreener API error: %s", exc)
     async def fetch_onchain_data(self) -> None:
@@ -115,6 +115,11 @@ class RugRiskMonitor:
                     "freeze_authority": freeze,
                     "mint_authority": mint,
                 }
+                logging.info(
+                    "Token authorities: freeze=%s mint=%s",
+                    freeze,
+                    mint,
+                )
                 # Reset error counter on success
                 self._onchain_error_count = 0
         except SerdeJSONError as exc:  # pragma: no cover - malformed response
