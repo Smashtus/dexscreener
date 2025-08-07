@@ -24,8 +24,6 @@ except ImportError:  # pragma: no cover - fallback for older versions
 from solana.rpc.async_api import AsyncClient
 from openai import AsyncOpenAI
 
-logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s [%(levelname)s] %(message)s")
 
 SYSTEM_PROMPT = (
     "You are an expert crypto analyst tasked to evaluate short-term trades of "
@@ -70,7 +68,10 @@ class RugRiskMonitor:
     async def fetch_dex_data(self) -> None:
         """Pull latest market data from Dexscreener."""
         try:
-            pair = await self.dex_client.get_token_pair_async(self.chain, self.pair_address)
+            pair = await self.dex_client.get_token_pair_async(
+                self.chain, self.pair_address
+            )
+            logging.debug("Dexscreener response for %s: %s", self.pair_address, pair)
             if not pair:
                 logging.warning("Pair %s not found on chain %s", self.pair_address, self.chain)
                 return
@@ -115,6 +116,7 @@ class RugRiskMonitor:
             resp = await self.rpc_client.get_account_info(
                 pubkey, encoding="jsonParsed"
             )
+            logging.debug("RPC account info for %s: %s", self.token_address, resp)
             info = resp.get("result", {}).get("value")
             if info and info.get("data"):
                 parsed = info["data"]["parsed"]["info"]
@@ -264,6 +266,7 @@ class RugRiskMonitor:
             return
 
         payload = self.build_payload()
+        logging.debug("Payload built for LLM: %s", json.dumps(payload))
         try:
             response = await self.openai.chat.completions.create(
                 model="gpt-4o-mini",
@@ -338,7 +341,17 @@ async def main(token_address: str) -> None:
 if __name__ == "__main__":  # pragma: no cover - script entry point
     parser = argparse.ArgumentParser(description="Solana rug risk monitor")
     parser.add_argument("mint_address", help="SPL token mint address to monitor")
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug logging for troubleshooting",
+    )
     args = parser.parse_args()
+
+    logging.basicConfig(
+        level=logging.DEBUG if args.debug else logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+    )
 
     try:
         asyncio.run(main(args.mint_address))
