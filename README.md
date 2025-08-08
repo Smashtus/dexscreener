@@ -22,8 +22,8 @@ search = client.search_pairs("WBTC")
 
 # Rug Risk Monitor
 
-Use the provided `main.py` script to monitor a Solana token by mint address:
+Use the provided `dexscreener_monitor.py` script to monitor a Solana token by mint address:
 
 ```
-python main.py <mint_address>
+python dexscreener_monitor.py <mint_address>
 ```

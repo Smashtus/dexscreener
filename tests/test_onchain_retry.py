@@ -5,7 +5,7 @@ import sys
 from solders.errors import SerdeJSONError
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
-from main import RugRiskMonitor
+from dexscreener_monitor import RugRiskMonitor
 
 
 class FailingClient:
